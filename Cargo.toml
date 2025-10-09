@@ -1,0 +1,34 @@
+[package]
+name = "sm2mml"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0"
+description = "Starmath 5.0 to MathMl converter. Use as a library or CLI tool."
+keywords = ["starmath", "mathml", "math", "converter"]
+repository = "https://github.com/alejo-c/sm2mml"
+categories = ["command-line-utilities", "parser-implementations"]
+
+[lib]
+name = "sm2mml"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sm2mml"
+path = "src/main.rs"
+required-features = ["bin-deps"]
+
+[dependencies]
+anyhow = "1.0.100"
+quick-xml = "0.38.3"
+xmlformat = "1.2.1"
+clap = { version = "4.5.48", features = ["derive"], optional = true }
+
+[features]
+default = []
+bin-deps = ["dep:clap"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
