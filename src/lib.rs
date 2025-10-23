@@ -602,11 +602,11 @@ mod tests {
     fn test_starmath_conversion() {
         let test_cases = vec![
             (
-                r#"D &quot;=&quot; C − M × log 10 sum {cuatro plieges}"#,
+                r#"D = C − M × log 10 sum {cuatro plieges}#,
                 "test/test1.expected.mml",
             ),
             (
-                r#"&quot;%&quot; grasacorporal &quot;=&quot; left ({4,95} over {densidad} &quot;-&quot; 4,5 right ) × 100"#,
+                r#"% "grasa corporal" = left ({4,95} over {densidad} - 4,5 right ) × 100"#,
                 "test/test2.expected.mml",
             ),
             (
