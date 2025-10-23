@@ -112,8 +112,7 @@ fn tokenize(input: &str) -> Vec<Token> {
             _ => {
                 let mut word = String::new();
                 while let Some(&ch) = chars.peek() {
-                    if ch == ' ' || ch == '{' || ch == '}' || ch == '"' || ch == '\t' || ch == '\n'
-                    {
+                    if [' ', '{', '}', '"', '\t', '\n'].contains(&ch) {
                         break;
                     }
                     word.push(chars.next().unwrap());
