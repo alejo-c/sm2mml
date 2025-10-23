@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    io::{self, IsTerminal, Read},
-    path::PathBuf,
-};
+use std::io::{self, IsTerminal, Read};
 
 use anyhow::Result;
 use clap::Parser;
@@ -11,7 +7,7 @@ use sm2mml::starmath_to_mathml;
 
 #[derive(Parser)]
 struct CLI {
-    text: Option<PathBuf>,
+    text: Option<String>,
 }
 
 fn main() -> Result<()> {
