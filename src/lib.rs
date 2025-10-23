@@ -197,17 +197,11 @@ impl Parser {
                     // Skip the closing parenthesis
                     self.advance();
                 }
-                "±" => {
+                "±" | "+-" | "−" | "-" | "×" | "*" | "times" => {
                     self.advance();
-                    writer.write_event(Event::Start(BytesStart::new("mi")))?;
-                    writer.write_event(Event::Text(BytesText::new("±")))?;
-                    writer.write_event(Event::End(BytesEnd::new("mi")))?;
-                }
-                "−" | "×" => {
-                    self.advance();
-                    writer.write_event(Event::Start(BytesStart::new("mi")))?;
+                    writer.write_event(Event::Start(BytesStart::new("mo")))?;
                     writer.write_event(Event::Text(BytesText::new(word)))?;
-                    writer.write_event(Event::End(BytesEnd::new("mi")))?;
+                    writer.write_event(Event::End(BytesEnd::new("mo")))?;
                 }
                 _ => {
                     self.advance();
