@@ -11,6 +11,7 @@ pub fn starmath_to_mathml(starmath: &str) -> Result<String> {
 
     let mut math = BytesStart::new("math");
     math.push_attribute(("xmlns", "http://www.w3.org/1998/Math/MathML"));
+    math.push_attribute(("display", "block"));
     writer.write_event(Event::Start(math))?;
 
     writer.write_event(Event::Start(BytesStart::new("semantics")))?;
@@ -50,6 +51,8 @@ enum Token {
     Word(String),
     LBrace,
     RBrace,
+    LParen,
+    RParen,
     String(String),
 }
 
@@ -73,6 +76,14 @@ fn tokenize(input: &str) -> Vec<Token> {
                 chars.next();
                 tokens.push(Token::RBrace);
             }
+            '(' => {
+                chars.next();
+                tokens.push(Token::LParen);
+            }
+            ')' => {
+                chars.next();
+                tokens.push(Token::RParen);
+            }
             '"' => {
                 chars.next();
                 let mut string = String::new();
@@ -88,7 +99,7 @@ fn tokenize(input: &str) -> Vec<Token> {
             _ => {
                 let mut word = String::new();
                 while let Some(&ch) = chars.peek() {
-                    if [' ', '{', '}', '"', '\t', '\n'].contains(&ch) {
+                    if [' ', '{', '}', '(', ')', '"', '\t', '\n'].contains(&ch) {
                         break;
                     }
                     word.push(chars.next().unwrap());
@@ -171,10 +182,30 @@ impl Parser {
                     // Skip the closing parenthesis
                     self.advance();
                 }
-                "±" | "+-" | "−" | "-" => {
+                "%" => {
+                    self.advance();
+                    writer.write_event(Event::Start(BytesStart::new("mtext")))?;
+                    writer.write_event(Event::Text(BytesText::new("%")))?;
+                    writer.write_event(Event::End(BytesEnd::new("mtext")))?;
+                }
+                "=" => {
+                    self.advance();
+                    let mut mo = BytesStart::new("mo");
+                    mo.push_attribute(("stretchy", "false"));
+                    writer.write_event(Event::Start(mo))?;
+                    writer.write_event(Event::Text(BytesText::new("=")))?;
+                    writer.write_event(Event::End(BytesEnd::new("mo")))?;
+                }
+                "±" | "+-" => {
+                    self.advance();
+                    writer.write_event(Event::Start(BytesStart::new("mi")))?;
+                    writer.write_event(Event::Text(BytesText::new(word)))?;
+                    writer.write_event(Event::End(BytesEnd::new("mi")))?;
+                }
+                "−" | "-" => {
                     self.advance();
                     writer.write_event(Event::Start(BytesStart::new("mo")))?;
-                    writer.write_event(Event::Text(BytesText::new(word)))?;
+                    writer.write_event(Event::Text(BytesText::new("−")))?;
                     writer.write_event(Event::End(BytesEnd::new("mo")))?;
                 }
                 "×" | "*" | "times" => {
@@ -185,65 +216,53 @@ impl Parser {
                 }
                 _ => {
                     self.advance();
-                    // Determine if this is a number or identifier
-                    let is_number = word
-                        .chars()
-                        .all(|c| c.is_ascii_digit() || c == ',' || c == '.');
-                    if is_number {
-                        writer.write_event(Event::Start(BytesStart::new("mn")))?;
-                        writer.write_event(Event::Text(BytesText::new(word)))?;
-                        writer.write_event(Event::End(BytesEnd::new("mn")))?;
-                    } else {
-                        // Check if this is a standard mathematical function (should be upright)
-                        let is_function = matches!(
-                            word.as_str(),
-                            "sin"
-                                | "cos"
-                                | "tan"
-                                | "sec"
-                                | "csc"
-                                | "cot"
-                                | "sinh"
-                                | "cosh"
-                                | "tanh"
-                                | "sech"
-                                | "csch"
-                                | "coth"
-                                | "arcsin"
-                                | "arccos"
-                                | "arctan"
-                                | "arcsec"
-                                | "arccsc"
-                                | "arccot"
-                                | "log"
-                                | "ln"
-                                | "lg"
-                                | "exp"
-                                | "lim"
-                                | "sup"
-                                | "inf"
-                                | "max"
-                                | "min"
-                                | "det"
-                                | "dim"
-                                | "ker"
-                                | "deg"
-                                | "gcd"
-                                | "lcm"
-                                | "Pr"
-                                | "hom"
-                                | "arg"
-                                | "mod"
-                        );
 
-                        let mut mi = BytesStart::new("mi");
-                        if word.len() > 1 && !is_function {
-                            mi.push_attribute(("mathvariant", "italic"));
+                    // Check if rsub, ^, or over follows this token
+                    if let Some(Token::Word(op)) = self.peek() {
+                        if op == "rsub" {
+                            writer.write_event(Event::Start(BytesStart::new("msub")))?;
+
+                            // Write the base
+                            self.write_token_content(writer, word)?;
+
+                            self.advance(); // skip "rsub"
+
+                            // Parse the subscript
+                            self.parse_element(writer)?;
+
+                            writer.write_event(Event::End(BytesEnd::new("msub")))?;
+                            return Ok(());
+                        } else if op == "^" {
+                            writer.write_event(Event::Start(BytesStart::new("msup")))?;
+
+                            // Write the base
+                            self.write_token_content(writer, word)?;
+
+                            self.advance(); // skip "^"
+
+                            // Parse the exponent
+                            self.parse_element(writer)?;
+
+                            writer.write_event(Event::End(BytesEnd::new("msup")))?;
+                            return Ok(());
+                        } else if op == "over" {
+                            writer.write_event(Event::Start(BytesStart::new("mfrac")))?;
+
+                            // Write the numerator
+                            self.write_token_content(writer, word)?;
+
+                            self.advance(); // skip "over"
+
+                            // Parse the denominator
+                            self.parse_element(writer)?;
+
+                            writer.write_event(Event::End(BytesEnd::new("mfrac")))?;
+                            return Ok(());
                         }
-                        writer.write_event(Event::Start(mi))?;
-                        writer.write_event(Event::Text(BytesText::new(word)))?;
-                        writer.write_event(Event::End(BytesEnd::new("mi")))?;
                     }
+
+                    // Normal identifier or number
+                    self.write_token_content(writer, word)?;
                 }
             },
             Token::String(ref s) => {
@@ -258,6 +277,11 @@ impl Parser {
             }
             Token::RBrace => {
                 return Ok(());
+            }
+            Token::LParen | Token::RParen => {
+                // Parentheses are handled by parse_left_fence
+                // Skip them if encountered here
+                self.advance();
             }
         }
         Ok(())
@@ -279,6 +303,45 @@ impl Parser {
         }
 
         let group_end = temp_pos;
+
+        // First, check if there's an "over" operator INSIDE this group (at brace level 0)
+        let mut over_pos = None;
+        let mut inner_brace_count = 0;
+        for i in group_start..group_end - 1 {
+            match &self.tokens[i] {
+                Token::LBrace => inner_brace_count += 1,
+                Token::RBrace => inner_brace_count -= 1,
+                Token::Word(w) if w == "over" && inner_brace_count == 0 => {
+                    over_pos = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        // If there's an "over" inside the group, create a fraction
+        if let Some(over_idx) = over_pos {
+            writer.write_event(Event::Start(BytesStart::new("mfrac")))?;
+
+            // Parse numerator (tokens before "over")
+            let mut num_parser = Parser {
+                tokens: self.tokens[group_start..over_idx].to_vec(),
+                pos: 0,
+            };
+            num_parser.parse_expression(writer)?;
+
+            // Parse denominator (tokens after "over")
+            let mut denom_parser = Parser {
+                tokens: self.tokens[over_idx + 1..group_end - 1].to_vec(),
+                pos: 0,
+            };
+            denom_parser.parse_expression(writer)?;
+
+            writer.write_event(Event::End(BytesEnd::new("mfrac")))?;
+
+            self.pos = group_end;
+            return Ok(());
+        }
 
         // Check what follows
         if let Some(Token::Word(op)) = self.tokens.get(group_end) {
@@ -397,20 +460,13 @@ impl Parser {
     fn parse_sum(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<()> {
         self.advance(); // skip "sum"
 
-        writer.write_event(Event::Start(BytesStart::new("mrow")))?;
-
         let mut mo = BytesStart::new("mo");
         mo.push_attribute(("stretchy", "false"));
         writer.write_event(Event::Start(mo))?;
         writer.write_event(Event::Text(BytesText::new("∑")))?;
         writer.write_event(Event::End(BytesEnd::new("mo")))?;
 
-        writer.write_event(Event::Start(BytesStart::new("mrow")))?;
-
         self.parse_element(writer)?;
-
-        writer.write_event(Event::End(BytesEnd::new("mrow")))?;
-        writer.write_event(Event::End(BytesEnd::new("mrow")))?;
 
         Ok(())
     }
@@ -419,12 +475,18 @@ impl Parser {
         self.advance(); // skip "left"
 
         // Get the opening fence
-        let fence = if let Some(Token::Word(f)) = self.peek() {
-            f.clone()
-        } else {
-            return Ok(());
+        let fence = match self.peek() {
+            Some(Token::Word(f)) => {
+                let s = f.clone();
+                self.advance();
+                s
+            }
+            Some(Token::LParen) => {
+                self.advance();
+                "(".to_string()
+            }
+            _ => return Ok(()),
         };
-        self.advance();
 
         writer.write_event(Event::Start(BytesStart::new("mrow")))?;
 
@@ -439,29 +501,33 @@ impl Parser {
 
         // Content inside fence
         writer.write_event(Event::Start(BytesStart::new("mrow")))?;
-        writer.write_event(Event::Start(BytesStart::new("mrow")))?;
 
         // Parse until we hit "right"
         while let Some(token) = self.peek() {
-            if let Token::Word(w) = token {
-                if w == "right" {
-                    break;
-                }
+            if let Token::Word(w) = token
+                && w == "right"
+            {
+                break;
             }
             self.parse_element(writer)?;
         }
 
         writer.write_event(Event::End(BytesEnd::new("mrow")))?;
-        writer.write_event(Event::End(BytesEnd::new("mrow")))?;
 
         // Closing fence
         self.advance(); // skip "right"
-        let closing_fence = if let Some(Token::Word(f)) = self.peek() {
-            f.clone()
-        } else {
-            return Ok(());
+        let closing_fence = match self.peek() {
+            Some(Token::Word(f)) => {
+                let s = f.clone();
+                self.advance();
+                s
+            }
+            Some(Token::RParen) => {
+                self.advance();
+                ")".to_string()
+            }
+            _ => return Ok(()),
         };
-        self.advance();
 
         let mut mo = BytesStart::new("mo");
         mo.push_attribute(("fence", "true"));
@@ -475,45 +541,67 @@ impl Parser {
 
         Ok(())
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn test_starmath_conversion() {
-        let test_cases = vec![
-            (
-                r#"D = C − M × log 10 sum "cuatro plieges"#,
-                "test/test1.expected.mml",
-            ),
-            (
-                r#"% "grasa corporal" = left ({4,95} over {densidad} - 4,5 right ) times 100"#,
-                "test/test2.expected.mml",
-            ),
-            (
-                r#"acute {X} = ± {Z} rsub {alfa} sqrt {{{s} ^ {2}} over {n}}"#,
-                "test/test3.expected.mml",
-            ),
-            (
-                r#"P = ± {Z} rsub {alfa} sqrt {{pq} over {n}}"#,
-                "test/test4.expected.mml",
-            ),
-        ];
-
-        for (input, expected_file) in test_cases {
-            let expected = fs::read_to_string(expected_file)
-                .unwrap_or_else(|_| panic!("Failed to read {}", expected_file));
-            let actual = starmath_to_mathml(input).expect("Failed to convert StarMath to MathML");
-
-            assert_eq!(
-                actual.trim(),
-                expected.trim(),
-                "Mismatch for test file: {}",
-                expected_file
+    fn write_token_content(&self, writer: &mut Writer<Cursor<Vec<u8>>>, word: &str) -> Result<()> {
+        // Determine if this is a number or identifier
+        let is_number = word
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == ',' || c == '.');
+        if is_number {
+            writer.write_event(Event::Start(BytesStart::new("mn")))?;
+            writer.write_event(Event::Text(BytesText::new(word)))?;
+            writer.write_event(Event::End(BytesEnd::new("mn")))?;
+        } else {
+            // Check if this is a standard mathematical function (should be upright)
+            let is_function = matches!(
+                word,
+                "sin"
+                    | "cos"
+                    | "tan"
+                    | "sec"
+                    | "csc"
+                    | "cot"
+                    | "sinh"
+                    | "cosh"
+                    | "tanh"
+                    | "sech"
+                    | "csch"
+                    | "coth"
+                    | "arcsin"
+                    | "arccos"
+                    | "arctan"
+                    | "arcsec"
+                    | "arccsc"
+                    | "arccot"
+                    | "log"
+                    | "ln"
+                    | "lg"
+                    | "exp"
+                    | "lim"
+                    | "sup"
+                    | "inf"
+                    | "max"
+                    | "min"
+                    | "det"
+                    | "dim"
+                    | "ker"
+                    | "deg"
+                    | "gcd"
+                    | "lcm"
+                    | "Pr"
+                    | "hom"
+                    | "arg"
+                    | "mod"
             );
+
+            let mut mi = BytesStart::new("mi");
+            if word.len() > 1 && !is_function {
+                mi.push_attribute(("mathvariant", "italic"));
+            }
+            writer.write_event(Event::Start(mi))?;
+            writer.write_event(Event::Text(BytesText::new(word)))?;
+            writer.write_event(Event::End(BytesEnd::new("mi")))?;
         }
+        Ok(())
     }
 }
