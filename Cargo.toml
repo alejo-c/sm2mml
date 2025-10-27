@@ -1,6 +1,6 @@
 [package]
 name = "sm2mml"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 license = "GPL-3.0"
 description = "Starmath 5.0 to MathMl converter. Use as a library or CLI tool."
