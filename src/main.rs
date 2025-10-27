@@ -22,7 +22,7 @@ fn main() -> Result<()> {
         content
     };
 
-    let output = starmath_to_mathml(&content)?;
+    let output = starmath_to_mathml(&content.trim())?;
     println!("{}", output);
     Ok(())
 }

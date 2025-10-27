@@ -2,64 +2,46 @@ use anyhow::Result;
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use std::io::Cursor;
+use xmlformat::Formatter;
 
 pub fn starmath_to_mathml(starmath: &str) -> Result<String> {
-    let mut writer = Writer::new_with_indent(Cursor::new(Vec::new()), b' ', 2);
+    let mut writer = Writer::new(Cursor::new(Vec::new()));
 
-    // XML declaration
     writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))?;
-    writer.write_event(Event::Text(BytesText::new("\n")))?;
 
-    // Root math element
     let mut math = BytesStart::new("math");
     math.push_attribute(("xmlns", "http://www.w3.org/1998/Math/MathML"));
-    math.push_attribute(("display", "block"));
     writer.write_event(Event::Start(math))?;
-    writer.write_event(Event::Text(BytesText::new("\n  ")))?;
 
-    // Semantics element
     writer.write_event(Event::Start(BytesStart::new("semantics")))?;
-    writer.write_event(Event::Text(BytesText::new("\n    ")))?;
-
-    // mrow element
     writer.write_event(Event::Start(BytesStart::new("mrow")))?;
-    writer.write_event(Event::Text(BytesText::new("\n      ")))?;
 
-    // Parse StarMath and generate MathML
     parse_starmath(&mut writer, starmath)?;
 
-    writer.write_event(Event::Text(BytesText::new("\n    ")))?;
     writer.write_event(Event::End(BytesEnd::new("mrow")))?;
-    writer.write_event(Event::Text(BytesText::new("\n    ")))?;
 
-    // Annotation with original StarMath
-    // Decode the input for the annotation to match expected format
-    let decoded = decode_html_entities(starmath);
     let mut annotation = BytesStart::new("annotation");
     annotation.push_attribute(("encoding", "StarMath 5.0"));
-
     writer.write_event(Event::Start(annotation))?;
-    writer.write_event(Event::Text(BytesText::new("\n  ")))?;
-    writer.write_event(Event::Text(BytesText::new(&decoded)))?;
-    writer.write_event(Event::Text(BytesText::new("\n  ")))?;
+
+    let encoded = encode_html_entities(starmath);
+    writer.write_event(Event::Text(BytesText::new("STARMATH")))?;
+
     writer.write_event(Event::End(BytesEnd::new("annotation")))?;
-    writer.write_event(Event::Text(BytesText::new("\n  ")))?;
-
-    // Close semantics
     writer.write_event(Event::End(BytesEnd::new("semantics")))?;
-    writer.write_event(Event::Text(BytesText::new("\n")))?;
-
-    // Close math
     writer.write_event(Event::End(BytesEnd::new("math")))?;
 
-    let result = writer.into_inner().into_inner();
-    Ok(String::from_utf8(result)?)
+    let buffer = writer.into_inner().into_inner();
+    let xml_str = String::from_utf8(buffer)?;
+    let formatted_xml = Formatter::default().format_xml(&xml_str)?;
+    let result = formatted_xml.replace("STARMATH", &encoded);
+    Ok(result)
 }
 
 fn parse_starmath(writer: &mut Writer<Cursor<Vec<u8>>>, input: &str) -> Result<()> {
     let tokens = tokenize(input);
     let mut parser = Parser::new(tokens);
-    parser.parse_expression(writer, 0)?;
+    parser.parse_expression(writer)?;
     Ok(())
 }
 
@@ -123,10 +105,20 @@ fn tokenize(input: &str) -> Vec<Token> {
 
 fn decode_html_entities(input: &str) -> String {
     input
-        .replace("&quot;", "\"")
         .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("“", "\"")
+        .replace("”", "\"")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
+}
+
+fn encode_html_entities(input: &str) -> String {
+    input
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
 }
 
 struct Parser {
@@ -151,30 +143,18 @@ impl Parser {
         token
     }
 
-    fn parse_expression(
-        &mut self,
-        writer: &mut Writer<Cursor<Vec<u8>>>,
-        depth: usize,
-    ) -> Result<()> {
-        let mut first = true;
-        let indent = "  ".repeat(3 + depth);
-
+    fn parse_expression(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<()> {
         while let Some(token) = self.peek() {
             if matches!(token, Token::RBrace) {
                 return Ok(());
             }
 
-            if !first {
-                writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
-            }
-            first = false;
-
-            self.parse_element(writer, depth)?;
+            self.parse_element(writer)?;
         }
         Ok(())
     }
 
-    fn parse_element(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>, depth: usize) -> Result<()> {
+    fn parse_element(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<()> {
         let token = match self.peek() {
             Some(t) => t.clone(),
             None => return Ok(()),
@@ -182,10 +162,10 @@ impl Parser {
 
         match token {
             Token::Word(ref word) => match word.as_str() {
-                "acute" => self.parse_accent(writer, "´", depth)?,
-                "sqrt" => self.parse_sqrt(writer, depth)?,
-                "sum" => self.parse_sum(writer, depth)?,
-                "left" => self.parse_left_fence(writer, depth)?,
+                "acute" => self.parse_accent(writer, "´")?,
+                "sqrt" => self.parse_sqrt(writer)?,
+                "sum" => self.parse_sum(writer)?,
+                "left" => self.parse_left_fence(writer)?,
                 "right" => {
                     self.advance();
                     // Skip the closing parenthesis
@@ -274,7 +254,7 @@ impl Parser {
             }
             Token::LBrace => {
                 self.advance();
-                self.parse_group(writer, depth)?;
+                self.parse_group(writer)?;
             }
             Token::RBrace => {
                 return Ok(());
@@ -283,7 +263,7 @@ impl Parser {
         Ok(())
     }
 
-    fn parse_group(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>, depth: usize) -> Result<()> {
+    fn parse_group(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<()> {
         // Look ahead to see what follows this group
         let group_start = self.pos;
         let mut brace_count = 1;
@@ -304,26 +284,17 @@ impl Parser {
         if let Some(Token::Word(op)) = self.tokens.get(group_end) {
             match op.as_str() {
                 "rsub" => {
-                    let indent = "  ".repeat(4 + depth);
                     writer.write_event(Event::Start(BytesStart::new("msub")))?;
-                    writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
 
                     let mut sub_parser = Parser {
                         tokens: self.tokens[group_start..group_end - 1].to_vec(),
                         pos: 0,
                     };
-                    sub_parser.parse_expression(writer, depth + 1)?;
-
-                    writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
+                    sub_parser.parse_expression(writer)?;
 
                     self.pos = group_end + 1; // Skip past rsub
-                    self.parse_element(writer, depth + 1)?;
+                    self.parse_element(writer)?;
 
-                    let parent_indent = "  ".repeat(3 + depth);
-                    writer.write_event(Event::Text(BytesText::new(&format!(
-                        "\n{}",
-                        parent_indent
-                    ))))?;
                     writer.write_event(Event::End(BytesEnd::new("msub")))?;
 
                     // Skip the closing brace of the subscript if it exists
@@ -334,26 +305,17 @@ impl Parser {
                     return Ok(());
                 }
                 "^" => {
-                    let indent = "  ".repeat(4 + depth);
                     writer.write_event(Event::Start(BytesStart::new("msup")))?;
-                    writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
 
                     let mut sub_parser = Parser {
                         tokens: self.tokens[group_start..group_end - 1].to_vec(),
                         pos: 0,
                     };
-                    sub_parser.parse_expression(writer, depth + 1)?;
-
-                    writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
+                    sub_parser.parse_expression(writer)?;
 
                     self.pos = group_end + 1; // Skip past ^
-                    self.parse_element(writer, depth + 1)?;
+                    self.parse_element(writer)?;
 
-                    let parent_indent = "  ".repeat(3 + depth);
-                    writer.write_event(Event::Text(BytesText::new(&format!(
-                        "\n{}",
-                        parent_indent
-                    ))))?;
                     writer.write_event(Event::End(BytesEnd::new("msup")))?;
 
                     // Skip the closing brace of the superscript if it exists
@@ -364,26 +326,17 @@ impl Parser {
                     return Ok(());
                 }
                 "over" => {
-                    let indent = "  ".repeat(4 + depth);
                     writer.write_event(Event::Start(BytesStart::new("mfrac")))?;
-                    writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
 
                     let mut sub_parser = Parser {
                         tokens: self.tokens[group_start..group_end - 1].to_vec(),
                         pos: 0,
                     };
-                    sub_parser.parse_expression(writer, depth + 1)?;
-
-                    writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
+                    sub_parser.parse_expression(writer)?;
 
                     self.pos = group_end + 1; // Skip past over
-                    self.parse_element(writer, depth + 1)?;
+                    self.parse_element(writer)?;
 
-                    let parent_indent = "  ".repeat(3 + depth);
-                    writer.write_event(Event::Text(BytesText::new(&format!(
-                        "\n{}",
-                        parent_indent
-                    ))))?;
                     writer.write_event(Event::End(BytesEnd::new("mfrac")))?;
 
                     // Skip the closing brace of the denominator if it exists
@@ -402,31 +355,21 @@ impl Parser {
             tokens: self.tokens[group_start..group_end - 1].to_vec(),
             pos: 0,
         };
-        sub_parser.parse_expression(writer, depth)?;
+        sub_parser.parse_expression(writer)?;
 
         self.pos = group_end;
 
         Ok(())
     }
 
-    fn parse_accent(
-        &mut self,
-        writer: &mut Writer<Cursor<Vec<u8>>>,
-        accent: &str,
-        depth: usize,
-    ) -> Result<()> {
+    fn parse_accent(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>, accent: &str) -> Result<()> {
         self.advance(); // skip "acute"
-
-        let indent = "  ".repeat(4 + depth);
 
         let mut attr = BytesStart::new("mover");
         attr.push_attribute(("accent", "true"));
         writer.write_event(Event::Start(attr))?;
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
 
-        self.parse_element(writer, depth + 1)?;
-
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
+        self.parse_element(writer)?;
 
         let mut mo = BytesStart::new("mo");
         mo.push_attribute(("stretchy", "false"));
@@ -434,37 +377,27 @@ impl Parser {
         writer.write_event(Event::Text(BytesText::new(accent)))?;
         writer.write_event(Event::End(BytesEnd::new("mo")))?;
 
-        let parent_indent = "  ".repeat(3 + depth);
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", parent_indent))))?;
         writer.write_event(Event::End(BytesEnd::new("mover")))?;
 
         Ok(())
     }
 
-    fn parse_sqrt(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>, depth: usize) -> Result<()> {
+    fn parse_sqrt(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<()> {
         self.advance(); // skip "sqrt"
 
-        let indent = "  ".repeat(4 + depth);
-
         writer.write_event(Event::Start(BytesStart::new("msqrt")))?;
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
 
-        self.parse_element(writer, depth + 1)?;
+        self.parse_element(writer)?;
 
-        let parent_indent = "  ".repeat(3 + depth);
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", parent_indent))))?;
         writer.write_event(Event::End(BytesEnd::new("msqrt")))?;
 
         Ok(())
     }
 
-    fn parse_sum(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>, depth: usize) -> Result<()> {
+    fn parse_sum(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<()> {
         self.advance(); // skip "sum"
 
-        let indent = "  ".repeat(4 + depth);
-
         writer.write_event(Event::Start(BytesStart::new("mrow")))?;
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
 
         let mut mo = BytesStart::new("mo");
         mo.push_attribute(("stretchy", "false"));
@@ -472,34 +405,18 @@ impl Parser {
         writer.write_event(Event::Text(BytesText::new("∑")))?;
         writer.write_event(Event::End(BytesEnd::new("mo")))?;
 
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
-
         writer.write_event(Event::Start(BytesStart::new("mrow")))?;
-        writer.write_event(Event::Text(BytesText::new(&format!(
-            "\n{}",
-            "  ".repeat(5 + depth)
-        ))))?;
 
-        self.parse_element(writer, depth + 2)?;
+        self.parse_element(writer)?;
 
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
         writer.write_event(Event::End(BytesEnd::new("mrow")))?;
-
-        let parent_indent = "  ".repeat(3 + depth);
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", parent_indent))))?;
         writer.write_event(Event::End(BytesEnd::new("mrow")))?;
 
         Ok(())
     }
 
-    fn parse_left_fence(
-        &mut self,
-        writer: &mut Writer<Cursor<Vec<u8>>>,
-        depth: usize,
-    ) -> Result<()> {
+    fn parse_left_fence(&mut self, writer: &mut Writer<Cursor<Vec<u8>>>) -> Result<()> {
         self.advance(); // skip "left"
-
-        let indent = "  ".repeat(4 + depth);
 
         // Get the opening fence
         let fence = if let Some(Token::Word(f)) = self.peek() {
@@ -510,7 +427,6 @@ impl Parser {
         self.advance();
 
         writer.write_event(Event::Start(BytesStart::new("mrow")))?;
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
 
         // Opening fence
         let mut mo = BytesStart::new("mo");
@@ -521,20 +437,9 @@ impl Parser {
         writer.write_event(Event::Text(BytesText::new(&fence)))?;
         writer.write_event(Event::End(BytesEnd::new("mo")))?;
 
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
-
         // Content inside fence
         writer.write_event(Event::Start(BytesStart::new("mrow")))?;
-        writer.write_event(Event::Text(BytesText::new(&format!(
-            "\n{}",
-            "  ".repeat(5 + depth)
-        ))))?;
-
         writer.write_event(Event::Start(BytesStart::new("mrow")))?;
-        writer.write_event(Event::Text(BytesText::new(&format!(
-            "\n{}",
-            "  ".repeat(6 + depth)
-        ))))?;
 
         // Parse until we hit "right"
         while let Some(token) = self.peek() {
@@ -543,30 +448,11 @@ impl Parser {
                     break;
                 }
             }
-            self.parse_element(writer, depth + 3)?;
-
-            if let Some(next_token) = self.peek() {
-                if let Token::Word(w) = next_token {
-                    if w != "right" {
-                        writer.write_event(Event::Text(BytesText::new(&format!(
-                            "\n{}",
-                            "  ".repeat(6 + depth)
-                        ))))?;
-                    }
-                }
-            }
+            self.parse_element(writer)?;
         }
 
-        writer.write_event(Event::Text(BytesText::new(&format!(
-            "\n{}",
-            "  ".repeat(5 + depth)
-        ))))?;
         writer.write_event(Event::End(BytesEnd::new("mrow")))?;
-
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
         writer.write_event(Event::End(BytesEnd::new("mrow")))?;
-
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", indent))))?;
 
         // Closing fence
         self.advance(); // skip "right"
@@ -585,8 +471,6 @@ impl Parser {
         writer.write_event(Event::Text(BytesText::new(&closing_fence)))?;
         writer.write_event(Event::End(BytesEnd::new("mo")))?;
 
-        let parent_indent = "  ".repeat(3 + depth);
-        writer.write_event(Event::Text(BytesText::new(&format!("\n{}", parent_indent))))?;
         writer.write_event(Event::End(BytesEnd::new("mrow")))?;
 
         Ok(())
@@ -602,19 +486,19 @@ mod tests {
     fn test_starmath_conversion() {
         let test_cases = vec![
             (
-                r#"D = C − M × log 10 sum {cuatro plieges}#,
+                r#"D = C − M × log 10 sum "cuatro plieges"#,
                 "test/test1.expected.mml",
             ),
             (
-                r#"% "grasa corporal" = left ({4,95} over {densidad} - 4,5 right ) × 100"#,
+                r#"% "grasa corporal" = left ({4,95} over {densidad} - 4,5 right ) times 100"#,
                 "test/test2.expected.mml",
             ),
             (
-                r#"acute {X} "=" ± {Z} rsub {alfa} sqrt {{{s} ^ {2}} over {n}}"#,
+                r#"acute {X} = ± {Z} rsub {alfa} sqrt {{{s} ^ {2}} over {n}}"#,
                 "test/test3.expected.mml",
             ),
             (
-                r#"P &quot;=&quot; ± {Z} rsub {alfa} sqrt {{pq} over {n}}"#,
+                r#"P = ± {Z} rsub {alfa} sqrt {{pq} over {n}}"#,
                 "test/test4.expected.mml",
             ),
         ];
