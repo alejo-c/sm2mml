@@ -37,16 +37,11 @@ pub fn starmath_to_mathml(starmath: &str) -> Result<String> {
     let decoded = decode_html_entities(starmath);
     let mut annotation = BytesStart::new("annotation");
     annotation.push_attribute(("encoding", "StarMath 5.0"));
+
     writer.write_event(Event::Start(annotation))?;
-
-    // If the input is long, use multiline formatting
-    if decoded.len() > 70 {
-        writer.write_event(Event::Text(BytesText::new("\n      ")))?;
-        writer.write_event(Event::Text(BytesText::new(&decoded)))?;
-    } else {
-        writer.write_event(Event::Text(BytesText::new(&decoded)))?;
-    }
-
+    writer.write_event(Event::Text(BytesText::new("\n  ")))?;
+    writer.write_event(Event::Text(BytesText::new(&decoded)))?;
+    writer.write_event(Event::Text(BytesText::new("\n  ")))?;
     writer.write_event(Event::End(BytesEnd::new("annotation")))?;
     writer.write_event(Event::Text(BytesText::new("\n  ")))?;
 
@@ -56,7 +51,6 @@ pub fn starmath_to_mathml(starmath: &str) -> Result<String> {
 
     // Close math
     writer.write_event(Event::End(BytesEnd::new("math")))?;
-    writer.write_event(Event::Text(BytesText::new("\n")))?;
 
     let result = writer.into_inner().into_inner();
     Ok(String::from_utf8(result)?)
@@ -197,16 +191,24 @@ impl Parser {
                     // Skip the closing parenthesis
                     self.advance();
                 }
-                "±" | "+-" | "−" | "-" | "×" | "*" | "times" => {
+                "±" | "+-" | "−" | "-" => {
                     self.advance();
                     writer.write_event(Event::Start(BytesStart::new("mo")))?;
                     writer.write_event(Event::Text(BytesText::new(word)))?;
                     writer.write_event(Event::End(BytesEnd::new("mo")))?;
                 }
+                "×" | "*" | "times" => {
+                    self.advance();
+                    writer.write_event(Event::Start(BytesStart::new("mo")))?;
+                    writer.write_event(Event::Text(BytesText::new("×")))?;
+                    writer.write_event(Event::End(BytesEnd::new("mo")))?;
+                }
                 _ => {
                     self.advance();
                     // Determine if this is a number or identifier
-                    let is_number = word.chars().all(|c| c.is_ascii_digit() || c == ',');
+                    let is_number = word
+                        .chars()
+                        .all(|c| c.is_ascii_digit() || c == ',' || c == '.');
                     if is_number {
                         writer.write_event(Event::Start(BytesStart::new("mn")))?;
                         writer.write_event(Event::Text(BytesText::new(word)))?;
@@ -254,8 +256,6 @@ impl Parser {
                                 | "mod"
                         );
 
-                        // All multi-character identifiers (except functions) get mathvariant="italic"
-                        // Single-character variables don't need it (already italic by default in MathML)
                         let mut mi = BytesStart::new("mi");
                         if word.len() > 1 && !is_function {
                             mi.push_attribute(("mathvariant", "italic"));
